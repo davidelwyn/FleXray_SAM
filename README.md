@@ -110,6 +110,10 @@ PNG overlays.
 
 ## Optional Python API
 
+For a single-frame biplane knee experiment with original-size bone masks,
+search regions, visual overlays, and optional manual-mask scoring, see
+[`examples/biplane/README.md`](examples/biplane/README.md).
+
 We also support Python. The API runs the same Hugging Face-backed workflow,
 with the same quality levels, and returns logits, probabilities, and masks in
 memory:

@@ -32,3 +32,4 @@ dist/
 
 # Example working directories
 examples/custom_dataset/work/
+outputs/biplane/
