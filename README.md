@@ -1,3 +1,7 @@
+## Biplane knee workflow and SAM previews
+
+For this repository's additions, start with [GETTING_STARTED.md](GETTING_STARTED.md). It covers choosing data, activities and outputs, automatic frame discovery, and separate femur/tibia MATLAB exports. The original FleXray documentation follows below.
+
 <p align="center">
   <img
     src="https://flexray.csail.mit.edu/assets/hero-mosaic/light/hero-mosaic-v3-desktop-prediction.webp"
@@ -109,6 +113,10 @@ With `--binary LABEL`, `C` is 1. The CLI writes `.npy` arrays and does not write
 PNG overlays.
 
 ## Optional Python API
+
+For a single-frame biplane knee experiment with original-size bone masks,
+search regions, visual overlays, and optional manual-mask scoring, see
+[`examples/biplane/README.md`](examples/biplane/README.md).
 
 We also support Python. The API runs the same Hugging Face-backed workflow,
 with the same quality levels, and returns logits, probabilities, and masks in

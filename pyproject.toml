@@ -35,6 +35,8 @@ classifiers = [
 ]
 dependencies = [
   "huggingface_hub>=0.24",
+  "imageio>=2.34",
+  "imageio-ffmpeg>=0.5",
   "numpy>=1.23",
   "Pillow>=10",
   "pyyaml>=6.0",
