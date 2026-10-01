@@ -13,7 +13,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATA = Path.home() / 'OneDrive - Cardiff University/PDRA/EPSRC-KneeImp/FleXray_testdata'
+DEFAULT_DATA = Path.cwd()
 
 
 def load_image(path):
@@ -81,6 +81,12 @@ def largest_component(mask):
     sizes = np.bincount(components.ravel())
     sizes[0] = 0
     return components == sizes.argmax()
+
+
+def fill_mask_holes(mask):
+    """Fill enclosed background gaps without bridging open gaps or joining islands."""
+    from scipy import ndimage as ndi
+    return ndi.binary_fill_holes(mask)
 
 
 def score(mask, roi, truth):
@@ -171,6 +177,35 @@ def restore_crop_probability(probability, shape, crop_box, pad_to_square):
     return result
 
 
+def leg_axis_angle(mask):
+    """Return the long-axis angle from horizontal in degrees, or None if unclear."""
+    y, x = np.nonzero(mask)
+    if len(x) < 20:
+        return None
+    points = np.column_stack((x, y)).astype('float64')
+    values, vectors = np.linalg.eigh(np.cov(points, rowvar=False))
+    if values[-1] <= 1e-8 or values[-1] / max(values[0], 1e-8) < 1.15:
+        return None
+    axis = vectors[:, -1]
+    # A PCA axis has no direction: angles theta and theta +/- 180 describe
+    # the same leg. Canonicalize to [-90, 90] before the horizontal test.
+    angle = float(np.degrees(np.arctan2(axis[1], axis[0])))
+    return (angle + 90.0) % 180.0 - 90.0
+
+
+def restore_rotated_crop_probability(probability, shape, crop_box, turns, pad_to_square):
+    """Restore model output from rotated crop to the original image coordinates."""
+    x0, y0, x1, y1 = crop_box
+    crop_shape = (y1 - y0, x1 - x0)
+    rotated_shape = crop_shape[::-1] if turns % 2 else crop_shape
+    restored = restore_probability(probability, rotated_shape, pad_to_square)
+    if turns:
+        restored = np.rot90(restored, -turns)
+    result = np.zeros(shape, dtype='float32')
+    result[y0:y1, x0:x1] = restored
+    return result
+
+
 def resolve_pair(args):
     """Require explicit paths or an unambiguous matching frame in C1S1/C2S1 folders."""
     if bool(args.view1) != bool(args.view2):
@@ -226,9 +261,7 @@ def run(args, segmenter=None):
         if missing:
             raise ValueError(f'Unknown labels: {sorted(missing)}. Available: {segmenter.label_names}')
     output = args.output.resolve()
-    # Keep test outputs in this checkout, never in the source-image folder.
-    if not output.is_relative_to(ROOT) or output == ROOT:
-        raise ValueError('Output must be a new directory inside the FleXray_SAM repository.')
+    # New directories only: source folders and previous results cannot be overwritten.
     output.mkdir(parents=True, exist_ok=False)
     report = {'status': 'inputs_only' if args.prepare_only else 'predicted',
               'model': args.model, 'revision': args.revision, 'ensemble': args.ensemble,
@@ -238,6 +271,7 @@ def run(args, segmenter=None):
               'leg_crop': args.leg_crop,
               'keep_largest': args.keep_largest,
               'mask_detector': args.mask_detector,
+              'fill_holes': args.fill_holes,
               'coordinates': 'original pixels; origin top-left; boxes [x0,y0,x1,y1], end exclusive',
               'note': 'Independent 2D segmentations; no calibrated 3D pose or SAM import is performed.',
               'views': {}}
@@ -272,6 +306,33 @@ def run(args, segmenter=None):
             ImageDraw.Draw(leg_overlay).rectangle((cx0, cy0, cx1 - 1, cy1 - 1), outline='yellow', width=2)
             leg_overlay.save(folder / 'leg_crop_preview.png')
             model_input = model_input[cy0:cy1, cx0:cx1]
+        else:
+            leg, _, _ = brightness_crop(array, args.leg_cutoff, 0)
+        rotation_turns = 0
+        orientation_info = {'status': 'disabled'}
+        orientation_directions = getattr(args, 'orientation_direction', {
+            'view1': args.view1_rotation,
+            'view2': args.view2_rotation,
+        })
+        rotation_policy = orientation_directions[view]
+        if args.auto_orientation and view in args.auto_orientation_views:
+            angle = leg_axis_angle(leg)
+            sideways = angle is not None and abs(angle) <= args.orientation_horizontal_deg
+            rotation_turns = (1 if rotation_policy == 'counterclockwise' else -1) if sideways else 0
+            orientation_info = {
+                'status': f'rotated_{rotation_policy}' if sideways else (
+                    'unchanged_uncertain_axis' if angle is None else 'unchanged_near_vertical'),
+                'leg_axis_angle_degrees_from_horizontal': angle,
+                'horizontal_threshold_degrees': args.orientation_horizontal_deg,
+                'quarter_turns_counterclockwise': rotation_turns,
+                'direction_policy': f'{rotation_policy} for horizontal legs, selected per view'}
+            if rotation_turns:
+                model_input = np.rot90(model_input, rotation_turns).copy()
+        elif args.auto_orientation:
+            orientation_info = {'status': 'disabled_for_view',
+                                'configured_views': args.auto_orientation_views,
+                                'quarter_turns_counterclockwise': 0}
+        info['orientation'] = orientation_info
         display_image(model_input).save(folder / 'model_input_preview.png')
         report['views'][view] = info
         if not args.prepare_only:
@@ -281,18 +342,29 @@ def run(args, segmenter=None):
             probabilities = prediction.probabilities.detach().cpu().numpy()[0]
             info['inference_seconds'] = time.perf_counter() - start
             info['labels'] = {}
+            combined_overlay = np.array(preview)
             for label in args.labels:
-                probability = restore_crop_probability(probabilities[segmenter.label_names.index(label)],
-                                                       array.shape, crop_box, segmenter.preprocessing.pad_to_square)
+                if rotation_turns:
+                    probability = restore_rotated_crop_probability(
+                        probabilities[segmenter.label_names.index(label)], array.shape,
+                        crop_box, rotation_turns, segmenter.preprocessing.pad_to_square)
+                else:
+                    probability = restore_crop_probability(probabilities[segmenter.label_names.index(label)],
+                                                           array.shape, crop_box, segmenter.preprocessing.pad_to_square)
                 mask = probability >= args.threshold
                 raw_pixels = int(mask.sum())
-                if args.keep_largest or args.mask_detector:
+                if args.keep_largest or args.mask_detector or args.fill_holes:
                     Image.fromarray(mask.astype('uint8') * 255).save(folder / f'{label}_raw_mask.png')
                 mask &= field
                 detector_removed = raw_pixels - int(mask.sum())
                 before_islands = int(mask.sum())
                 if args.keep_largest:
                     mask = largest_component(mask)
+                island_removed = before_islands - int(mask.sum())
+                before_fill = int(mask.sum())
+                if args.fill_holes:
+                    mask = fill_mask_holes(mask) & field
+                filled_pixels = int(mask.sum()) - before_fill
                 box, roi = search_region(mask, args.margin)
                 roi &= field
                 np.save(folder / f'{label}_probability.npy', probability)
@@ -301,7 +373,11 @@ def run(args, segmenter=None):
                 # Preserve native dimensions and intensity values for later integration experiments.
                 Image.fromarray(np.where(roi, array, 0)).save(folder / f'{label}_roi_image.tif')
                 overlay = np.array(preview)
-                overlay[mask] = (overlay[mask] * 0.55 + np.array([0, 255, 90]) * 0.45).astype('uint8')
+                color = {'femurs': (0, 100, 255), 'tibiae': (255, 0, 0)}.get(label, (0, 255, 90))
+                overlay[mask] = (overlay[mask] * 0.55 + np.array(color) * 0.45).astype('uint8')
+                combined_overlay[mask] = (
+                    combined_overlay[mask] * 0.55 + np.array(color) * 0.45
+                ).astype('uint8')
                 overlay = Image.fromarray(overlay)
                 x0, y0, x1, y1 = box
                 ImageDraw.Draw(overlay).rectangle((x0, y0, x1 - 1, y1 - 1), outline='yellow', width=2)
@@ -309,13 +385,16 @@ def run(args, segmenter=None):
                 stats = {'box_xyxy': box, 'mask_pixels': int(mask.sum()),
                          'raw_mask_pixels': raw_pixels,
                          'removed_detector_pixels': detector_removed,
-                         'removed_island_pixels': before_islands - int(mask.sum()),
+                         'removed_island_pixels': island_removed,
+                         'filled_hole_pixels': filled_pixels,
                          'search_area_reduction': float(1 - roi.mean()),
                          'status': 'detected' if mask.any() else 'empty_prediction_full_frame_fallback'}
                 if (view, label) in truths:
                     stats.update(score(mask, roi, truths[view, label]))
                 info['labels'][label] = stats
                 panels.append((f'{view}: {label}', overlay))
+            # Clean combined view for sequence videos: all requested masks, no boxes.
+            Image.fromarray(combined_overlay).save(folder / 'combined_overlay.png')
         else:
             panels.append((f'{view}: input only', preview))
     sheet = Image.new('RGB', (512 * len(panels), 544), 'black')
@@ -348,6 +427,12 @@ def parser():
     p.add_argument('--invert', action='store_true', help='Invert intensities before preprocessing; exports retain original intensities')
     p.add_argument('--keep-largest', action='store_true', help='Keep only the largest 8-connected island per bone and view before computing search boxes')
     p.add_argument('--mask-detector', action='store_true', help='Exclude pixels outside the measured detector field before island cleanup; also clip ROI masks')
+    p.add_argument('--fill-holes', action='store_true', help='Fill enclosed holes after island removal, retaining the detector boundary')
+    p.add_argument('--auto-orientation', action='store_true', help='Rotate near-horizontal leg crops before inference and map outputs back')
+    p.add_argument('--auto-orientation-views', nargs='+', choices=['view1', 'view2'], default=['view1', 'view2'], help='Camera views eligible for automatic rotation (default: both)')
+    p.add_argument('--view1-rotation', choices=['clockwise', 'counterclockwise'], default='clockwise', help='Automatic rotation direction for view1/C1')
+    p.add_argument('--view2-rotation', choices=['clockwise', 'counterclockwise'], default='clockwise', help='Automatic rotation direction for view2/C2')
+    p.add_argument('--orientation-horizontal-deg', type=float, default=45, help='Treat leg axes within this many degrees of horizontal as sideways (default: 45)')
     p.add_argument('--detector-inset', type=int, default=3, help='Inset detector boundary by this many original pixels (default: 3)')
     p.add_argument('--leg-crop', action='store_true', help='Crop using the dark leg against bright background, before inversion')
     p.add_argument('--leg-cutoff', type=float, default=0.65, help='Normalized original-intensity cutoff for leg mask (default: 0.65)')

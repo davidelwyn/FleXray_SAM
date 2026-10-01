@@ -2,9 +2,8 @@
 
 ## 1. Python and VS Code
 
-Use 64-bit Python 3.11 for this setup. FleXray requires Python >=3.10; the
-Python launcher on this machine currently lists Anaconda Python 3.9, which is
-too old. Install a suitable interpreter from the
+Use 64-bit Python 3.11 for this setup. FleXray requires Python >=3.10;
+Python 3.9 is too old. Install a suitable interpreter from the
 [official Windows downloads](https://www.python.org/downloads/windows/) or
 create a Python 3.11 environment with your existing Conda installation.
 
@@ -12,7 +11,7 @@ Install Microsoft's **Python** extension in VS Code. Open this folder with
 **File > Open Folder**:
 
 ```text
-C:\Users\sce9dw1\Github\FleXray_SAM
+D:\Projects\FleXray_SAM
 ```
 
 ## 2. Create an isolated environment and install
@@ -20,7 +19,7 @@ C:\Users\sce9dw1\Github\FleXray_SAM
 Open **Terminal > New Terminal** (PowerShell), then run:
 
 ```powershell
-cd C:\Users\sce9dw1\Github\FleXray_SAM
+cd D:\Projects\FleXray_SAM
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e .
@@ -43,6 +42,8 @@ listed in `pyproject.toml`. You do not need separate commands for each package:
 | Pillow | >=10 | TIFF/PNG input, masks, previews |
 | scipy | >=1.10 | FleXray scientific utilities |
 | huggingface_hub | >=0.24 | Fetch pretrained model bundles |
+| imageio | >=2.34 | Write the combined biplane MP4 |
+| imageio-ffmpeg | >=0.5 | Bundled video encoder used by imageio |
 | safetensors | >=0.4 | Read model weights |
 | pyyaml | >=6.0 | Model configuration |
 
@@ -69,8 +70,8 @@ Press **Ctrl+Shift+P**, run **Python: Select Interpreter**, and select
 ## 4. Check the inputs, then run the model
 
 ```powershell
-.\.venv\Scripts\python.exe examples/biplane/test_pair.py --frame 1 --prepare-only
-.\.venv\Scripts\python.exe examples/biplane/test_pair.py --frame 1 --device cpu
+.\.venv\Scripts\python.exe examples/biplane/test_pair.py --data-dir "D:\Xrays\one_trial" --frame 1 --prepare-only
+.\.venv\Scripts\python.exe examples/biplane/test_pair.py --data-dir "D:\Xrays\one_trial" --frame 1 --device cpu
 ```
 
 The second command downloads model weights on its first run and predicts femur
@@ -81,10 +82,10 @@ bundle, add `--model "C:\path\to\bundle"`.
 To try more knee labels or another frame:
 
 ```powershell
-.\.venv\Scripts\python.exe examples/biplane/test_pair.py --frame 25 --labels femurs tibiae patellae fibulae --margin 20 --device auto
+.\.venv\Scripts\python.exe examples/biplane/test_pair.py --data-dir "D:\Xrays\one_trial" --frame 25 --labels femurs tibiae patellae fibulae --margin 20 --device auto
 ```
 
-The default input directory is your supplied `FleXray_testdata` folder. Open
+The commands above use the directory supplied with `--data-dir`. Open
 the new `outputs/biplane/<timestamp>/comparison.png` in VS Code. `report.json`
 contains per-bone search-area reduction and detection status. See
 [README.md](README.md) for explicit image selection, annotation scoring, and
@@ -92,10 +93,10 @@ the limitations of this first-stage experiment.
 
 ## 5. Optional checks
 
-The four focused offline tests need no additional testing dependency:
+The focused offline tests need no additional testing dependency:
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest tests.test_biplane_example -v
+.\.venv\Scripts\python.exe -m unittest tests.test_biplane_example tests.test_biplane_sequence -v
 ```
 
 For pytest instead:
@@ -113,7 +114,8 @@ For pytest instead:
 - CUDA errors: add `--device cpu` for the initial test.
 - Missing or ambiguous camera files: supply `--view1` and `--view2` explicitly;
   paths are relative to `--data-dir` unless absolute.
-- Existing output folder: omit `--output` to create a new timestamped run.
+- Existing output folder: choose a new `--output` path. Sequence `--interactive`
+  creates a timestamped run inside your selected output parent.
 - Empty or poor masks: inspect input previews, threshold and margin; the script
   flags empty detections and retains the full frame. A completed run does not
   establish segmentation accuracy without manual reference masks.

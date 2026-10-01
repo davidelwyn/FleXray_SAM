@@ -33,3 +33,10 @@ dist/
 # Example working directories
 examples/custom_dataset/work/
 outputs/biplane/
+
+# Local workflow outputs and MATLAB working files
+/outputs/
+/data/
+/results/
+**/masked_preview_*/
+*.asv

@@ -1,3 +1,7 @@
+## Biplane knee workflow and SAM previews
+
+For this repository's additions, start with [GETTING_STARTED.md](GETTING_STARTED.md). It covers choosing data, activities and outputs, automatic frame discovery, and separate femur/tibia MATLAB exports. The original FleXray documentation follows below.
+
 <p align="center">
   <img
     src="https://flexray.csail.mit.edu/assets/hero-mosaic/light/hero-mosaic-v3-desktop-prediction.webp"

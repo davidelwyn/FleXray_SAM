@@ -1,28 +1,14 @@
-# Single-pair FleXray / SlicerAutoscoperM experiment
+# Biplane segmentation and SAM preview
 
-For first-time installation, dependencies, and interpreter selection, follow
-[the Windows / VS Code setup guide](VSCODE_SETUP.md).
+Start with [the shared workflow guide](../../GETTING_STARTED.md) for root/activity/output selection and MATLAB export. See [Windows setup](VSCODE_SETUP.md) for installation.
 
-Run these commands from `C:\Users\sce9dw1\Github\FleXray_SAM`, using Python
-3.10 or newer. Installation uses this checkout:
+For a single pair, run from the repository root:
 
 ```powershell
-python -m pip install -e .
-python examples/biplane/test_pair.py --frame 1
+python examples/biplane/test_pair.py --data-dir "D:\Xrays\one_trial" --frame 1
 ```
 
-The default data directory is
-`C:\Users\sce9dw1\OneDrive - Cardiff University\PDRA\EPSRC-KneeImp\FleXray_testdata`
-(resolved from your home directory). The script finds exactly one TIFF ending in
-`.0001.tif` for each of `C1S1` and `C2S1`. `--frame 25` chooses `.0025.tif`.
-Matching numbers are a selection convention, not proof of camera synchronization;
-confirm the two files represent the same instant. Ambiguous matches are rejected.
-
-For another pair or directory:
-
-```powershell
-python examples/biplane/test_pair.py --data-dir "D:\my_images" --view1 "camera1.tif" --view2 "camera2.tif" --labels femurs tibiae patellae fibulae --margin 20 --threshold 0.5
-```
+Select an unambiguous pair with --view1 and --view2 when needed; paths are absolute or relative to --data-dir. The default data directory is the current working directory.
 
 Inputs must be single-frame grayscale images readable by Pillow (e.g. TIFF,
 PNG, BMP, JPEG). TIFF stacks, color images, and DICOM are not supported by this
@@ -37,11 +23,12 @@ The first inference run downloads pretrained weights from Hugging Face. Use
 ## Inspecting the result
 
 Each run creates a new folder under `outputs/biplane` in this repository.
-`--output` can select a new directory inside the repository; existing directories
+`--output` can select a new directory anywhere writable; existing directories
 are rejected so earlier experiments cannot be overwritten. The input files are
 never modified.
 
-- `comparison.png`: views and selected bones side by side; green segmentation,
+- `comparison.png`: views and selected bones side by side; blue femur, red tibia
+  (green for other labels),
   yellow padded rectangular search region.
 - `view1/` and `view2/`: each contains a display preview and one set of outputs
   per bone: floating-point probability `.npy`, binary `*_mask.png`, binary
@@ -67,10 +54,10 @@ before choosing a margin or threshold.
 Run from the repository root (one line):
 
 ```powershell
-.\.venv\Scripts\python.exe examples/biplane/run_sequence.py --activity LevelTM --start 20 --end 60 --invert --leg-crop --keep-largest --tta-samples 1 --device cpu
+.\.venv\Scripts\python.exe examples/biplane/run_sequence.py --data-dir "D:\Xrays" --output "D:\Results\new_run" --activity LevelTM --start 20 --end 60 --invert --leg-crop --keep-largest --tta-samples 1 --device cpu
 ```
 
-Change `--start` and `--end` to choose the inclusive range. `--step 5` samples
+Omit `--start` and `--end` to discover all frames, or set them to choose an inclusive range. `--step 5` samples
 every fifth frame. `--activity KneeFlex` selects the other activity. There must
 be exactly one folder per camera for the activity; missing/duplicate frames are
 rejected before inference. The model loads once for the whole run.
@@ -83,7 +70,31 @@ frames. These are review prompts, not validated failure detection or accuracy
 scores. Unflagged masks can still be wrong. This runs independent segmentation,
 not temporal propagation, and frame-number matching assumes synchronized inputs.
 
-### Remove small islands
+Each sequence run also creates `biplane_overlay_video.mp4`. It shows C1 and C2
+side by side with the femur in blue and tibia in red on the same image, without
+search boxes. Set its playback rate with `--video-fps 10`.
+
+For frame-by-frame leg orientation correction, add `--auto-orientation`. The
+undirected leg-mask long axis is estimated independently in each view and frame.
+If it is within 45 degrees of horizontal (angles are normalized so -160 degrees
+is treated as 20 degrees from horizontal), that crop is rotated clockwise by 90 degrees
+before inference; otherwise it is left as-is. The probability map is rotated
+back to original detector coordinates before thresholds, cleanup, and export.
+`report.json` records the estimated angle, selected turn, and policy for every
+view/frame. The option makes one model prediction per view/frame. This direction
+is based on the promising KneeFlex C1 checks at frames 173, 175 and 177; it has
+not been established for every camera or activity. Review the angle and output
+around orientation changes before using these masks for tracking. Change the
+horizontal threshold with `--orientation-horizontal-deg 40` if needed.
+Rotation direction is set independently with `--view1-rotation` and
+`--view2-rotation`; each accepts `clockwise` or `counterclockwise`. For the
+current KneeFlex hypothesis, use clockwise for C1 and counterclockwise for C2.
+
+Example for the requested range:
+
+```powershell
+.\.venv\Scripts\python.exe examples/biplane/run_sequence.py --data-dir "D:\Xrays" --output "D:\Results\new_run" --activity KneeFlex --start 120 --end 180 --invert --leg-crop --keep-largest --mask-detector --fill-holes --auto-orientation --view1-rotation clockwise --view2-rotation counterclockwise --tta-samples 1 --device cpu
+```
 
 ### Exclude the detector exterior
 
@@ -102,6 +113,21 @@ ROI masks themselves exclude the exterior. Empty bone predictions retain the
 full-detector ROI. Saved probabilities remain unfiltered, and raw masks are
 preserved. The report distinguishes detector-removed and island-removed pixels.
 This cannot remove incorrect pixels that lie inside the detector field.
+
+### Fill enclosed holes
+
+Add `--fill-holes` to fill background regions completely enclosed by each bone
+mask, after largest-island filtering. The result is clipped to the detector
+mask again. This does not bridge open notches, recover missing shafts, or join
+separate islands. It fills all enclosed holes, so inspect whether a gap represents
+a true feature before using it. Raw masks and probability maps remain available;
+the report records `filled_hole_pixels` separately from removed pixels.
+
+For the combined sequence experiment:
+
+```powershell
+.\.venv\Scripts\python.exe examples/biplane/run_sequence.py --data-dir "D:\Xrays" --output "D:\Results\new_run" --activity LevelTM --start 20 --end 60 --invert --leg-crop --keep-largest --mask-detector --fill-holes --tta-samples 1 --device cpu
+```
 
 ### Keep the largest island
 
@@ -169,7 +195,7 @@ Every selected label needs a mask for each view (zero background, nonzero bone).
 Then run:
 
 ```powershell
-python examples/biplane/test_pair.py --frame 1 --ground-truth annotations
+python examples/biplane/test_pair.py --data-dir "D:\Xrays\one_trial" --frame 1 --ground-truth annotations
 ```
 
 The report adds Dice, IoU, and `roi_bone_recall`: the fraction of annotated bone
@@ -182,7 +208,7 @@ frames and both cameras before drawing conclusions about your acquisition.
 To test loading without inference or downloaded weights:
 
 ```powershell
-python examples/biplane/test_pair.py --frame 1 --prepare-only
+python examples/biplane/test_pair.py --data-dir "D:\Xrays\one_trial" --frame 1 --prepare-only
 ```
 
 This mode needs only NumPy and Pillow, produces input previews and a report

@@ -16,6 +16,17 @@ spec.loader.exec_module(example)
 
 
 class BiplaneTest(unittest.TestCase):
+    def test_fill_enclosed_holes_but_not_open_notches(self):
+        mask = np.zeros((10, 10), bool)
+        mask[2:8, 2:8] = True
+        mask[4, 4] = False
+        mask[2:4, 6] = False
+        result = example.fill_mask_holes(mask)
+        self.assertTrue(result[4, 4])
+        self.assertFalse(result[3, 6])
+        self.assertFalse(result[0, 0])
+        self.assertFalse(mask[4, 4])
+
     def test_detector_mask_keeps_dark_anatomy_and_rejects_exterior(self):
         yy, xx = np.mgrid[:100, :100]
         circle = (xx - 50) ** 2 + (yy - 50) ** 2 <= 40 ** 2
@@ -125,7 +136,8 @@ class BiplaneTest(unittest.TestCase):
                 assert image.dtype == np.uint16
                 return SimpleNamespace(probabilities=FakeTensor())
 
-        with tempfile.TemporaryDirectory(dir=ROOT) as work:
+        # A collaborator may export outside the checkout; still refuse overwrite.
+        with tempfile.TemporaryDirectory() as work:
             work = Path(work)
             original = np.arange(28, dtype='uint16').reshape(4, 7) * 1000
             for camera in ('C1S1', 'C2S1'):
